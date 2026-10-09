@@ -11,7 +11,7 @@
 #include <string.h>
 
 struct node {
-	char op;
+	char lex;
 	struct node *lhs;
 	struct node *rhs;
 };
@@ -28,7 +28,7 @@ static void next(void)
 static struct node *make_node(char op, struct node *lhs, struct node *rhs)
 {
 	struct node *n = malloc(sizeof *n);
-	n->op = op;
+	n->lex = op;
 	n->lhs = lhs;
 	n->rhs = rhs;
 	return n;
@@ -38,6 +38,9 @@ enum op_type {
 	ADD,
 	SUB,
 	MUL,
+	DIV,
+	POW,
+	NOT,
 	NOT_OP,
 };
 
@@ -50,6 +53,9 @@ static const struct binding_powers binding_table[] = {
 	[ADD] = { 1, 2 },
 	[SUB] = { 1, 2 },
 	[MUL] = { 3, 4 },
+	[DIV] = { 3, 4 },
+	[POW] = { 6, 5 },
+	[NOT] = { 0, 6 },
 };
 
 static enum op_type get_type(char c)
@@ -58,19 +64,35 @@ static enum op_type get_type(char c)
 	case '+': return ADD;
 	case '-': return SUB;
 	case '*': return MUL;
+	case '/': return DIV;
+	case '^': return POW;
+	case '!': return NOT;
 	default: return NOT_OP;
 	}
 }
 
 static struct node *parse_expr(int min_bp)
 {
-	struct node *lhs = make_node(*src, NULL, NULL);
-	next();
+	struct node *lhs;
+	char c = *src;
+
+	if (c == '(') {
+		next();
+		lhs = parse_expr(0);
+		next();
+	} else if (get_type(c) == NOT) {
+		next();
+		struct node *operand = parse_expr(binding_table[NOT].right);
+		lhs = make_node(c, operand, NULL);
+	} else {
+		lhs = make_node(c, NULL, NULL);
+		next();
+	}
 
 	for (;;) {
-		char c = *src;
+		c = *src;
 		enum op_type op = get_type(c);
-		if (op == NOT_OP)
+		if (op == NOT_OP || op == NOT)
 			break;
 
 		struct binding_powers bp = binding_table[op];
@@ -88,13 +110,15 @@ static struct node *parse_expr(int min_bp)
 static void print_sexpr(const struct node *n)
 {
 	if (!n->lhs) {
-		putchar(n->op);
+		putchar(n->lex);
 		return;
 	}
-	printf("(%c ", n->op);
+	printf("(%c ", n->lex);
 	print_sexpr(n->lhs);
-	putchar(' ');
-	print_sexpr(n->rhs);
+	if (n->rhs) {
+		putchar(' ');
+		print_sexpr(n->rhs);
+	}
 	putchar(')');
 }
 
