@@ -35,12 +35,16 @@ static struct node *make_node(char op, struct node *lhs, struct node *rhs)
 }
 
 enum op_type {
+	COMMA,
 	ADD,
 	SUB,
 	MUL,
 	DIV,
 	POW,
 	NOT,
+	INDEX,
+	CALL,
+	DOT,
 	NOT_OP,
 };
 
@@ -50,23 +54,31 @@ struct binding_powers {
 };
 
 static const struct binding_powers binding_table[] = {
+	[COMMA] = { 0, 1 },
 	[ADD] = { 1, 2 },
 	[SUB] = { 1, 2 },
 	[MUL] = { 3, 4 },
 	[DIV] = { 3, 4 },
-	[POW] = { 6, 5 },
+	[POW] = { 7, 6 },
 	[NOT] = { 0, 6 },
+	[INDEX] = { 9, 0 },
+	[CALL] = { 9, 0 },
+	[DOT] = { 9, 10 },
 };
 
 static enum op_type get_type(char c)
 {
 	switch (c) {
+	case ',': return COMMA;
 	case '+': return ADD;
 	case '-': return SUB;
 	case '*': return MUL;
 	case '/': return DIV;
 	case '^': return POW;
 	case '!': return NOT;
+	case '(': return CALL;
+	case '[': return INDEX;
+	case '.': return DOT;
 	default: return NOT_OP;
 	}
 }
@@ -100,6 +112,14 @@ static struct node *parse_expr(int min_bp)
 			break;
 
 		next();
+
+		if (op == INDEX || op == CALL) {
+			struct node *inside = parse_expr(0);
+			next();
+			lhs = make_node(c, lhs, inside);
+			continue;
+		}
+
 		struct node *rhs = parse_expr(bp.right);
 		lhs = make_node(c, lhs, rhs);
 	}
