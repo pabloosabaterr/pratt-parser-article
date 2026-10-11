@@ -1,34 +1,57 @@
 /*
  * Minimal Pratt parser for my blog post.
  *
- * Operands are single characters (digit/letter).
+ * Operands are words (letters/digits) or single characters.
  * Assumes well-formed input: no error handling, no freeing.
  * Prints the result as an S-expression: 1 + 2 * 3  ->  (+ 1 (* 2 3))
  */
 
+#include <ctype.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 struct node {
-	char lex;
+	char *lex;
 	struct node *lhs;
 	struct node *rhs;
+	struct node *els; /* only used by if */
 };
 
-static const char *src;
+static const char *src; /* start of the current token */
+static int len;         /* length of the current token */
 
 static void next(void)
 {
-	src++;
+	src += len;
 	while (*src == ' ')
 		src++;
+
+	len = 0;
+	while (isalnum((unsigned char)src[len]))
+		len++;
+	if (len == 0 && *src)
+		len = 1;
 }
 
-static struct node *make_node(char op, struct node *lhs, struct node *rhs)
+static bool is(const char *word)
 {
-	struct node *n = malloc(sizeof *n);
-	n->lex = op;
+	return !strncmp(src, word, len) && word[len] == '\0';
+}
+
+/* Returns the current token as a string and moves to the next one. */
+static char *take(void)
+{
+	char *lex = strndup(src, len);
+	next();
+	return lex;
+}
+
+static struct node *make_node(char *lex, struct node *lhs, struct node *rhs)
+{
+	struct node *n = calloc(1, sizeof *n);
+	n->lex = lex;
 	n->lhs = lhs;
 	n->rhs = rhs;
 	return n;
@@ -39,7 +62,6 @@ enum op_type {
 	ADD,
 	SUB,
 	MUL,
-	DIV,
 	POW,
 	NOT,
 	INDEX,
@@ -53,17 +75,20 @@ struct binding_powers {
 	int right;
 };
 
+/*
+ * A left binding power of -1 means the token can never come after an
+ * expression: min_bp is never below 0, so the loop always stops on it.
+ */
 static const struct binding_powers binding_table[] = {
 	[COMMA] = { 0, 1 },
-	[ADD] = { 1, 2 },
-	[SUB] = { 1, 2 },
-	[MUL] = { 3, 4 },
-	[DIV] = { 3, 4 },
-	[POW] = { 7, 6 },
-	[NOT] = { 0, 6 },
+	[ADD]   = { 1, 2 },
+	[SUB]   = { 1, 2 },
+	[MUL]   = { 3, 4 },
+	[NOT]   = { -1, 5 },
+	[POW]   = { 7, 6 },
 	[INDEX] = { 9, 0 },
-	[CALL] = { 9, 0 },
-	[DOT] = { 9, 10 },
+	[CALL]  = { 9, 0 },
+	[DOT]   = { 9, 10 },
 };
 
 static enum op_type get_type(char c)
@@ -73,7 +98,6 @@ static enum op_type get_type(char c)
 	case '+': return ADD;
 	case '-': return SUB;
 	case '*': return MUL;
-	case '/': return DIV;
 	case '^': return POW;
 	case '!': return NOT;
 	case '(': return CALL;
@@ -86,42 +110,44 @@ static enum op_type get_type(char c)
 static struct node *parse_expr(int min_bp)
 {
 	struct node *lhs;
-	char c = *src;
 
-	if (c == '(') {
+	if (*src == '(') {
 		next();
 		lhs = parse_expr(0);
-		next();
-	} else if (get_type(c) == NOT) {
-		next();
-		struct node *operand = parse_expr(binding_table[NOT].right);
-		lhs = make_node(c, operand, NULL);
+		next(); /* skip ')' */
+	} else if (is("if")) {
+		lhs = make_node(take(), NULL, NULL);
+		lhs->lhs = parse_expr(0);
+		lhs->rhs = parse_expr(0);
+		if (is("else")) {
+			next();
+			lhs->els = parse_expr(0);
+		}
+	} else if (get_type(*src) == NOT) {
+		char *lex = take();
+		lhs = make_node(lex, NULL, parse_expr(binding_table[NOT].right));
 	} else {
-		lhs = make_node(c, NULL, NULL);
-		next();
+		lhs = make_node(take(), NULL, NULL);
 	}
 
 	for (;;) {
-		c = *src;
-		enum op_type op = get_type(c);
-		if (op == NOT_OP || op == NOT)
+		enum op_type op = get_type(*src);
+		if (op == NOT_OP)
 			break;
 
 		struct binding_powers bp = binding_table[op];
 		if (bp.left < min_bp)
 			break;
 
-		next();
+		char *lex = take();
 
 		if (op == INDEX || op == CALL) {
-			struct node *inside = parse_expr(0);
-			next();
-			lhs = make_node(c, lhs, inside);
+			lhs = make_node(lex, lhs, parse_expr(0));
+			next(); /* skip ']' or ')' */
 			continue;
 		}
 
-		struct node *rhs = parse_expr(bp.right);
-		lhs = make_node(c, lhs, rhs);
+		lhs = make_node(lex, lhs, parse_expr(bp.right));
 	}
 
 	return lhs;
@@ -129,15 +155,19 @@ static struct node *parse_expr(int min_bp)
 
 static void print_sexpr(const struct node *n)
 {
-	if (!n->lhs) {
-		putchar(n->lex);
+	if (!n->lhs && !n->rhs) {
+		fputs(n->lex, stdout);
 		return;
 	}
-	printf("(%c ", n->lex);
-	print_sexpr(n->lhs);
-	if (n->rhs) {
+	printf("(%s ", n->lex);
+	if (n->lhs) {
+		print_sexpr(n->lhs);
 		putchar(' ');
-		print_sexpr(n->rhs);
+	}
+	print_sexpr(n->rhs);
+	if (n->els) {
+		putchar(' ');
+		print_sexpr(n->els);
 	}
 	putchar(')');
 }
@@ -152,6 +182,8 @@ int main(void)
 			continue;
 
 		src = line;
+		len = 0;
+		next();
 		print_sexpr(parse_expr(0));
 		putchar('\n');
 	}
